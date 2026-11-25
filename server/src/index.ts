@@ -668,6 +668,9 @@ async function startServerWithDatabaseTeardown(
           password: "paperclip",
           port,
           persistent: true,
+          // Postgres refuses to run as root. When Paperclip runs as root (typical in cloud containers),
+          // let embedded-postgres create/use a dedicated "postgres" system user.
+          createPostgresUser: process.getuid?.() === 0,
           initdbFlags: ["--encoding=UTF8", "--locale=C", "--lc-messages=C"],
           onLog: appendEmbeddedPostgresLog,
           onError: appendEmbeddedPostgresLog,

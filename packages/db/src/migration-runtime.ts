@@ -21,6 +21,7 @@ type EmbeddedPostgresCtor = new (opts: {
   initdbFlags?: string[];
   onLog?: (message: unknown) => void;
   onError?: (message: unknown) => void;
+  createPostgresUser?: boolean;
 }) => EmbeddedPostgresInstance;
 
 export type MigrationConnection = {
@@ -142,6 +143,9 @@ async function ensureEmbeddedPostgresConnection(
     password: "paperclip",
     port: selectedPort,
     persistent: true,
+    // Postgres refuses to run as root. When Paperclip runs as root (typical in cloud containers),
+    // let embedded-postgres create/use a dedicated "postgres" system user.
+    createPostgresUser: process.getuid?.() === 0,
     initdbFlags: ["--encoding=UTF8", "--locale=C", "--lc-messages=C"],
     onLog: logBuffer.append,
     onError: logBuffer.append,

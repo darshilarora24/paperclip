@@ -531,7 +531,7 @@ async function buildPluginSdk() {
   }
 }
 
-async function getNativeRunnerRequired(): Promise<boolean> {
+async function getNativeRunnerRequired(): Promise<{ required: boolean; determined: boolean }> {
   const status = await runPnpm(
     [
       "--silent",
@@ -545,7 +545,7 @@ async function getNativeRunnerRequired(): Promise<boolean> {
   );
   if (status.signal) {
     exitForSignal(status.signal);
-    return true;
+    return { required: true, determined: true };
   }
   const requirement = resolveNativeRunnerRequirement({
     exitCode: status.code,
@@ -557,7 +557,7 @@ async function getNativeRunnerRequired(): Promise<boolean> {
       `[paperclip] unable to determine the native runner requirement; conservatively preparing the native runner${detail ? `\n${detail}` : "\n"}`,
     );
   }
-  return requirement.nativeRunnerRequired;
+  return { required: requirement.nativeRunnerRequired, determined: requirement.valid };
 }
 
 async function buildPaperclipRunner() {
@@ -575,7 +575,9 @@ async function buildPaperclipRunner() {
     process.exit(typescriptResult.code);
   }
 
-  const nativeRunnerRequired = await getNativeRunnerRequired();
+  const nativeRunnerStatus = await getNativeRunnerRequired();
+  const nativeRunnerRequired = nativeRunnerStatus.required;
+  let nativeRunnerBuildSkipped = false;
   if (
     paperclipRunnerBinaryNeedsBuild({
       repoRoot,
@@ -593,12 +595,28 @@ async function buildPaperclipRunner() {
       return;
     }
     if (binaryResult.code !== 0) {
-      console.error("[paperclip] paperclip runner native binary build failed");
-      process.exit(binaryResult.code);
+      if (!nativeRunnerStatus.determined) {
+        // We only built the native runner as a precaution (the requirement probe failed).
+        // Do not take the whole dev server down on machines without a Rust toolchain.
+        console.warn(
+          "[paperclip] native runner build failed, but it was only a precaution; continuing without it. " +
+            "Install Rust (https://rustup.rs) or set PAPERCLIP_RUNNER_BINARY if you need the native runner.",
+        );
+        nativeRunnerBuildSkipped = true;
+      } else {
+        console.error("[paperclip] paperclip runner native binary build failed");
+        console.error(
+          "[paperclip] The native runner needs a working Rust toolchain (https://rustup.rs) with network access to download it. " +
+            "To skip the build, point PAPERCLIP_RUNNER_BINARY at a prebuilt paperclip-runnerd binary, " +
+            "or use the Docker image / `npx paperclipai onboard` instead of building from source.",
+        );
+        process.exit(binaryResult.code);
+      }
     }
   }
   if (!configuredRunnerBinary?.trim()) {
-    const selected = nativeRunnerRequired ? resolveNativeRunnerDevBinary({ repoRoot }) : null;
+    const selected =
+      nativeRunnerRequired && !nativeRunnerBuildSkipped ? resolveNativeRunnerDevBinary({ repoRoot }) : null;
     if (selected?.sourceBuild) env.PAPERCLIP_RUNNER_BINARY = selected.binary;
     else delete env.PAPERCLIP_RUNNER_BINARY;
   }
@@ -713,8 +731,10 @@ async function stopChildForRestart() {
 }
 
 async function startServerChild() {
-  await buildPaperclipRunner();
+  // The plugin SDK must be built first: the native-runner probe in buildPaperclipRunner()
+  // imports server code that resolves @paperclipai/plugin-sdk from its dist output.
   await buildPluginSdk();
+  await buildPaperclipRunner();
 
   const serverScript = mode === "watch" ? "dev:watch" : "dev";
   child = spawn(

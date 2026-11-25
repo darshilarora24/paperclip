@@ -1,7 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmbeddedPostgresLogBuffer, formatEmbeddedPostgresError } from "./embedded-postgres-error.js";
 
 describe("formatEmbeddedPostgresError", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("explains how to fix data-directory permission errors when running as root", () => {
+    vi.spyOn(process, "getuid").mockReturnValue(0);
+    const error = formatEmbeddedPostgresError(new Error("Failed to start embedded PostgreSQL"), {
+      fallbackMessage: "startup failed",
+      recentLogs: ['FATAL: could not open lock file "/tmp/.s.PGSQL.54329.lock": Permission denied'],
+    });
+    expect(error.message).toContain('separate "postgres" system user');
+    expect(error.message).toContain("PAPERCLIP_HOME");
+    expect(error.message).toContain("DATABASE_URL");
+  });
+
+  it("does not add the root hint for a non-root user", () => {
+    vi.spyOn(process, "getuid").mockReturnValue(1000);
+    const error = formatEmbeddedPostgresError(new Error("Failed to start embedded PostgreSQL"), {
+      fallbackMessage: "startup failed",
+      recentLogs: ["FATAL: could not open lock file: Permission denied"],
+    });
+    expect(error.message).not.toContain("running as root");
+  });
+
   it("identifies semaphore exhaustion without recommending SQL lock changes", () => {
     const error = formatEmbeddedPostgresError(new Error(), {
       fallbackMessage: "startup failed",

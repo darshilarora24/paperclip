@@ -22,7 +22,7 @@ function summarizeRecentLogs(recentLogs: string[]): string | null {
     .join(" | ");
 }
 
-function detectEmbeddedPostgresHint(recentLogs: string[]): string | null {
+function detectBaseEmbeddedPostgresHint(recentLogs: string[]): string | null {
   const haystack = recentLogs.join("\n").toLowerCase();
   if (haystack.includes("could not create semaphores") || haystack.includes("semget(")) {
     return "Embedded PostgreSQL could not allocate operating-system semaphores. " +
@@ -38,6 +38,22 @@ function detectEmbeddedPostgresHint(recentLogs: string[]): string | null {
     "On macOS, this usually means the host's kern.sysv.shm* limits are too low for another local PostgreSQL cluster. " +
     "Stop other local PostgreSQL servers or raise the shared-memory sysctls, then retry."
   );
+}
+
+function detectEmbeddedPostgresHint(recentLogs: string[]): string | null {
+  const baseHint = detectBaseEmbeddedPostgresHint(recentLogs);
+  if (baseHint) return baseHint;
+  const haystack = recentLogs.join("\n").toLowerCase();
+  if (
+    process.getuid?.() === 0 &&
+    (haystack.includes("permission denied") || haystack.includes("could not change permissions"))
+  ) {
+    return "Paperclip is running as root, so embedded PostgreSQL runs as a separate \"postgres\" system user. " +
+      "That user must be able to reach the data directory and /tmp socket files: do not keep the data under /root (mode 700) " +
+      "and remove stale /tmp/.s.PGSQL.* files left by another user. " +
+      "Set PAPERCLIP_HOME to a path such as /var/lib/paperclip, run Paperclip as a non-root user, or set DATABASE_URL to an external Postgres.";
+  }
+  return null;
 }
 
 export function createEmbeddedPostgresLogBuffer(limit = DEFAULT_RECENT_LOG_LIMIT): {
